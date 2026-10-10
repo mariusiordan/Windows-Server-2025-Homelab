@@ -1,6 +1,6 @@
 # SilverBank Lab Documentation
 
-> Home lab project, SilverBank is a fictional company, built on my own Proxmox server to practise Windows Server 2025 administration. No real company data, passwords or public IP addresses are included.
+> Home lab project. SilverBank is a fictional company, built on my own Proxmox server to practise Windows Server 2025 administration. No real company data, passwords or public IP addresses are included.
 
 Last updated: 10 October 2026
 
@@ -18,6 +18,36 @@ SilverBank is a fictional small bank with about 35 employees. Its IT network run
 | Course followed | Windows Server 2025 Essential Training (LinkedIn Learning, Robert McMillen) |
 
 The lab is a practice environment for entry-level support and sysadmin roles.
+
+## Network diagram
+
+```mermaid
+flowchart TB
+    internet((Internet))
+    router["Home router<br/>192.168.7.1<br/>Gateway + DHCP .110-.199"]
+    bridge["vmbr0 Linux bridge<br/>Proxmox host 192.168.7.12<br/>Dell OptiPlex 5060, 48 GB RAM"]
+
+    internet --- router
+    router --- bridge
+
+    subgraph domain["Domain: corp.silverbank.internal (SILVERBANK)"]
+        dc01["LN-DC01<br/>AD DS + DNS<br/>192.168.7.80"]
+        dc02["LN-DC02<br/>AD DS + DNS + Global Catalog<br/>192.168.7.82"]
+        fs01["LN-FS01<br/>File server + Windows Admin Center<br/>192.168.7.81"]
+        cl01["LN-CL01<br/>Windows 11 Pro<br/>DHCP"]
+    end
+
+    bridge --- dc01
+    bridge --- dc02
+    bridge --- fs01
+    bridge --- cl01
+
+    dc01 <-->|AD replication| dc02
+    fs01 -.->|DNS + logins| dc01
+    cl01 -.->|DNS + logins| dc02
+```
+
+Solid lines are network connections. Dotted lines show which servers the members use for DNS and authentication (each member uses both DCs).
 
 ## Server inventory
 
