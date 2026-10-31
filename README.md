@@ -2,11 +2,11 @@
 
 > Home lab project. SilverBank is a fictional company, built on my own Proxmox server to practise Windows Server 2025 administration. No real company data, passwords or public IP addresses are included.
 
-Last updated: 10 October 2026
+Last updated: 31 October 2026
 
 ## Overview
 
-SilverBank is a fictional small bank with about 35 employees. Its IT network runs on my Proxmox homelab, a Dell OptiPlex 5060 (i7-8700, 48 GB RAM).
+SilverBank is a fictional small bank with about 35 employees. Its servers run on my Proxmox homelab, a Dell OptiPlex 5060 (i7-8700, 48 GB RAM), and its network is being built on a physical Cisco Catalyst 3560-CX switch.
 
 | Item | Value |
 | --- | --- |
@@ -19,16 +19,27 @@ SilverBank is a fictional small bank with about 35 employees. Its IT network run
 
 The lab is a practice environment for entry-level support and sysadmin roles.
 
+### Documents in this repository
+
+| File | Contents |
+| --- | --- |
+| `README.md` | This page: lab overview, inventory, operations, troubleshooting |
+| `AD-Installation-Guide.md` | Step-by-step guide: two domain controllers for corp.silverbank.internal |
+| `AD-Users-Computers-CheatSheet.md` | PowerShell cheat sheet: OUs, users, groups, computers, helpdesk tasks |
+| `learning-log/` | One note per study session |
+
 ## Network diagram
 
 ```mermaid
 flowchart TB
     internet((Internet))
     router["Home router<br/>192.168.7.1<br/>Gateway + DHCP .110-.199"]
+    switch["Cisco Catalyst 3560-CX<br/>Core switch<br/>Management 192.168.7.90"]
     bridge["vmbr0 Linux bridge<br/>Proxmox host 192.168.7.12<br/>Dell OptiPlex 5060, 48 GB RAM"]
 
     internet --- router
-    router --- bridge
+    router --- switch
+    switch --- bridge
 
     subgraph domain["Domain: corp.silverbank.internal (SILVERBANK)"]
         dc01["LN-DC01<br/>AD DS + DNS<br/>192.168.7.80"]
@@ -83,10 +94,40 @@ The home LAN is 192.168.7.0/24. Static devices use addresses below .110; the rou
 | 192.168.7.80 | LN-DC01 | Static |
 | 192.168.7.81 | LN-FS01 | Static |
 | 192.168.7.82 | LN-DC02 | Static |
+| 192.168.7.90 | Cisco Catalyst 3560-CX (management) | Static |
 | 192.168.7.101 | prod-vm1-BLUE (SilverBank app) | Static |
 | 192.168.7.102 | prod-vm2-GREEN (SilverBank app) | Static |
 
 The guest Wi-Fi is a separate, isolated network. These addresses are temporary: the plan moves SilverBank to its own VLANs behind OPNsense (servers in 10.10.10.0/24).
+
+## Physical network lab
+
+| Device | Model | Details |
+| --- | --- | --- |
+| Core switch | Cisco Catalyst WS-C3560CX-12TC-S | 12 x gigabit ports, Layer 3 (can route between VLANs), fanless |
+| Cabling | Cat6 U/UTP solid copper (OFC), LSZH | Cables crimped by hand, T568B, checked with a cable tester |
+| Console access | USB console cable | For the switch's console port |
+
+Status (October 2026): the switch sits between the home router and the Proxmox host, with management IP 192.168.7.90. The SilverBank VLANs are not configured yet; cable, crimping tool and console cable are arriving.
+
+Planned SilverBank network on the switch:
+
+| VLAN | Name | Subnet (planned) | Used by |
+| --- | --- | --- | --- |
+| 10 | Servers | 10.10.10.0/24 | Domain controllers, file server |
+| 20 | Staff | 10.10.20.0/24 | Employee PCs |
+| 30 | Management | 10.10.30.0/24 | IT admin access, switch management |
+| 99 | Guest | 10.10.99.0/24 | Internet only, isolated |
+
+What I plan to configure:
+
+- VLANs and access ports
+- An 802.1Q trunk to the Proxmox host (VLAN-aware bridge), so each VM is tagged into its VLAN
+- SVIs on the 3560-CX for inter-VLAN routing
+- DHCP relay (`ip helper-address`) so the domain controllers hand out addresses to every VLAN
+- ACLs to keep the Guest VLAN away from the servers
+
+Every configuration will be tested in Packet Tracer first, then applied to the real switch.
 
 ## How each machine joined the domain
 
@@ -171,6 +212,53 @@ done
 
 RAM: 48 GB since October 2026 (2 x 16 GB + 2 x 8 GB, DDR4-2666). memtester passed on 36 GB.
 
+## Backups and shadow copies
+
+Tested on the file server (LN-FS01) in October 2026:
+
+- Created a new volume and ran a backup with **Windows Server Backup**
+- Deleted files from a shared folder, then **restored them** from the backup
+- Restored a file with **Volume Shadow Copy** (right-click > Restore previous versions)
+
+| | Shadow Copy | Windows Server Backup | Proxmox backup |
+| --- | --- | --- | --- |
+| What | Snapshots of a volume | Files, folders or the whole server | The whole VM |
+| Restore speed | Seconds | Minutes | Minutes to hours |
+| Protects against | Deleted or overwritten files | Data loss, if stored on another disk | The whole server failing |
+| Who restores | The user (Previous Versions) | IT | IT |
+
+Rules I follow:
+
+- **A backup you haven't restored isn't a backup.** Always test a restore.
+- **A backup on the same disk as the data is a single point of failure.** If the disk fails, both are lost.
+- **3-2-1 rule:** 3 copies, on 2 types of storage, 1 copy off-site.
+- Shadow copies are kept on the same volume by default, so they don't replace backups.
+
+```powershell
+wbadmin get versions                                              # list backups
+wbadmin start backup -backupTarget:E: -include:D:\Shares -quiet   # back up the shares to E:
+vssadmin list shadows                                             # list shadow copies
+vssadmin create shadow /for=D:                                    # take a snapshot now
+```
+
+(Drive letters are examples: E: = backup volume, D: = data volume.)
+
+## Course progress
+
+I chose the lessons most useful for a Level 1 helpdesk role and practise each one in the lab.
+
+| Lesson | Status |
+| --- | --- |
+| Install AD DS, two domain controllers | Done |
+| Join servers and clients to the domain | Done |
+| Backing up Windows Server 2025 | Done |
+| Volume Shadow Copy | Done |
+| Event logs for troubleshooting | Next |
+| File server security (NTFS and share permissions) | To do |
+| Network printing | To do |
+| Task Manager, Performance Monitor | To do |
+| IIS, Hyper-V, Containers | Skipped for now (less relevant for helpdesk) |
+
 ## Troubleshooting log
 
 DNS caused most problems: check that the machine uses the DCs as DNS before anything else.
@@ -191,12 +279,20 @@ Useful checks: `ipconfig /all`, `nslookup`, `Test-NetConnection <host> -Port 389
 
 ## Next steps
 
+- [x] Windows Server Backup with a tested restore
+- [x] Volume Shadow Copy restore
+- [ ] Move backups to a separate disk and schedule them
+- [ ] Event Viewer: practise an account lockout (event ID 4740) and unlock the user
 - [ ] Create SilverBank OUs, groups and users (PowerShell script from a CSV)
 - [ ] Group Policy: password policy, mapped drives, first GPO to allow ping on servers
 - [ ] File shares on LN-FS01 with NTFS permissions per department
 - [ ] Reverse DNS lookup zone
 - [ ] Windows 11 template with Sysprep, then LN-CL02
-- [ ] OPNsense and VLANs, then DHCP on the DCs
+- [ ] Crimp and test the first Cat6 cables
+- [ ] Console into the Cisco 3560-CX, reset it and set a basic secure configuration
+- [ ] Design the SilverBank VLANs in Packet Tracer, then build them on the real switch
+- [ ] Trunk to Proxmox, inter-VLAN routing, DHCP relay to the domain controllers
+- [ ] OPNsense as the edge firewall, then DHCP on the DCs
 - [ ] Backups (Proxmox Backup Server or USB disk) and a UPS
 - [ ] GLPI ticketing system in a Debian container for helpdesk practice
 - [ ] Later: second PC as a Manchester site (AD Sites and replication)
