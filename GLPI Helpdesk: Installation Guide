@@ -1,0 +1,247 @@
+# GLPI Helpdesk: Installation Guide
+
+> Home lab project. GLPI is the ticketing system for my fictional company SilverBank, running in an Ubuntu container on my Proxmox homelab. Passwords are shown as placeholders and are stored outside this document.
+
+Last updated: 1 November 2026
+
+## Overview
+
+GLPI is an open-source IT service management tool: helpdesk tickets, asset inventory and a knowledge base. I installed it to practise real helpdesk work on my SilverBank lab (Windows Server 2025 Active Directory).
+
+| Item | Value |
+| --- | --- |
+| Container | Proxmox LXC, CT ID 230, unprivileged |
+| Hostname | ln-glpi01 |
+| OS | Ubuntu 26.04 LTS |
+| IP | 192.168.7.83/24, gateway 192.168.7.1 |
+| DNS | 192.168.7.80, 192.168.7.82 (domain controllers), search domain corp.silverbank.internal |
+| URL | http://helpdesk.corp.silverbank.internal |
+| Resources | 2 vCPU, 2 GB RAM, 20 GB disk |
+| Stack | Apache 2.4, PHP 8.5, MariaDB 11.8, GLPI 12.0.1 |
+
+## Contents
+
+1. [Create the container](#1-create-the-container)
+2. [Check the network and update](#2-check-the-network-and-update)
+3. [Install Apache, MariaDB and PHP](#3-install-apache-mariadb-and-php)
+4. [Create the database](#4-create-the-database)
+5. [Download GLPI](#5-download-glpi)
+6. [Configure Apache and PHP](#6-configure-apache-and-php)
+7. [Install GLPI from the command line](#7-install-glpi-from-the-command-line)
+8. [Post-installation security](#8-post-installation-security)
+9. [Troubleshooting log](#9-troubleshooting-log)
+10. [Next steps](#10-next-steps)
+
+## 1. Create the container
+
+Download the Ubuntu template on the Proxmox host:
+
+```bash
+pveam update
+pveam available --section system | grep ubuntu
+pveam download local <ubuntu-standard-template-name>
+```
+
+Proxmox web UI > **Create CT**:
+
+| Tab | Setting |
+| --- | --- |
+| General | CT ID 230, hostname ln-glpi01, root password, Unprivileged container ticked |
+| Template | Ubuntu standard template |
+| Disks | zfs-nvmeT500-vm, 20 GB |
+| CPU | 2 cores |
+| Memory | 2048 MB, swap 512 MB |
+| Network | vmbr0, static 192.168.7.83/24, gateway 192.168.7.1 |
+| DNS | Domain corp.silverbank.internal, servers 192.168.7.80 192.168.7.82 |
+
+Options > Start/Shutdown order: 5 (after the Windows lab).
+
+**Why a container and not a VM:** GLPI is a small Linux web app. A container shares the Proxmox kernel, starts in seconds and uses only the RAM it needs.
+
+## 2. Check the network and update
+
+```bash
+ip a                                  # 192.168.7.83 on eth0
+ping -c 3 192.168.7.1                 # gateway
+ping -c 3 google.com                  # internet + DNS forwarder on the DC
+getent hosts corp.silverbank.internal # finds both domain controllers
+timedatectl set-timezone Europe/London
+
+apt update
+apt full-upgrade -y
+apt autoremove -y
+```
+
+`/etc/resolv.conf` is managed by Proxmox (lines between `BEGIN PVE` and `END PVE`): change DNS in the container's DNS tab, not in the file.
+
+The container uses the Proxmox host's kernel, so kernel updates happen on the host, and the container rarely needs a reboot after updates.
+
+Snapshot: `clean-updated`.
+
+## 3. Install Apache, MariaDB and PHP
+
+```bash
+apt install -y apache2 mariadb-server libapache2-mod-php php php-mysql php-curl php-gd \
+  php-intl php-ldap php-xml php-mbstring php-zip php-bz2 php-bcmath wget tar
+php -v            # check against GLPI's supported PHP versions
+mariadb --version
+```
+
+`php-ldap` is needed later to connect GLPI to Active Directory.
+
+## 4. Create the database
+
+```bash
+mysql_secure_installation
+mysql -u root
+```
+
+```sql
+CREATE DATABASE glpi CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'glpi'@'localhost' IDENTIFIED BY '<db-password>';
+GRANT ALL PRIVILEGES ON glpi.* TO 'glpi'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+Test the login before using it anywhere:
+
+```bash
+mysql -u glpi -p'<db-password>' -e "SELECT 'login OK';" glpi
+```
+
+## 5. Download GLPI
+
+Latest release from the GLPI GitHub releases page:
+
+```bash
+cd /tmp
+wget https://github.com/glpi-project/glpi/releases/download/12.0.1/glpi-12.0.1.tgz
+tar -xzf glpi-12.0.1.tgz -C /var/www/
+chown -R www-data:www-data /var/www/glpi
+ls -ld /var/www/glpi       # owner www-data
+```
+
+## 6. Configure Apache and PHP
+
+Only GLPI's `public` folder is exposed to the web.
+
+`/etc/apache2/sites-available/glpi.conf`:
+
+```apache
+<VirtualHost *:80>
+    ServerName helpdesk.corp.silverbank.internal
+    DocumentRoot /var/www/glpi/public
+
+    <Directory /var/www/glpi/public>
+        Require all granted
+        RewriteEngine On
+        RewriteCond %{HTTP:Authorization} ^(.+)$
+        RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+        RewriteCond %{REQUEST_FILENAME} !-f
+        RewriteRule ^(.*)$ index.php [QSA,L]
+    </Directory>
+</VirtualHost>
+```
+
+```bash
+a2enmod rewrite
+a2dissite 000-default
+a2ensite glpi
+apache2ctl configtest      # must say "Syntax OK"
+```
+
+PHP session security, in `/etc/php/8.5/apache2/php.ini` (the **apache2** file, not the **cli** one):
+
+```ini
+session.cookie_httponly = On
+session.cookie_samesite = Lax
+```
+
+`session.cookie_secure` stays off until GLPI runs on HTTPS (turning it on over HTTP breaks the login).
+
+```bash
+systemctl restart apache2
+systemctl status apache2 --no-pager
+```
+
+Check what the running Apache PHP really sees (then delete the test file):
+
+```bash
+echo '<?php echo "httponly=" . ini_get("session.cookie_httponly") . " samesite=" . ini_get("session.cookie_samesite");' > /var/www/glpi/public/sesscheck.php
+# open http://192.168.7.83/sesscheck.php  ->  httponly=1 samesite=Lax
+rm /var/www/glpi/public/sesscheck.php
+```
+
+## 7. Install GLPI from the command line
+
+The command line gives clear errors and can be reused in scripts.
+
+```bash
+runuser -u www-data -- php /var/www/glpi/bin/console database:install --help
+
+runuser -u www-data -- php /var/www/glpi/bin/console database:install \
+  --db-host=localhost --db-name=glpi --db-user=glpi --db-password='<db-password>' \
+  --default-language=en_GB --no-telemetry
+```
+
+Answers: port 3306 (default), SSL **No** (the database is on the same machine), continue **Yes**. Add `--no-interaction` to skip the questions.
+
+Expected result:
+
+```
+> Database structure created.
+> Default data imported.
+> Default forms created.
+> Default rules initialized.
+> Security keys generated.
+> Configuration defaults defined.
+> Installation done.
+```
+
+Log in at `http://192.168.7.83` with the default super-admin account, then secure it immediately.
+
+(Alternative: the web installer at `http://192.168.7.83` runs a requirements check, then asks for the same database settings.)
+
+## 8. Post-installation security
+
+| Task | How |
+| --- | --- |
+| Change the `glpi` super-admin password | Administration > Users > glpi |
+| Change and disable `tech`, `normal`, `post-only` | Each user > new password + untick Active > Save |
+| Leave `glpi-system` | Internal account |
+| Delete the web installer | `rm /var/www/glpi/install/install.php` |
+| Protect the database config | `chmod 640 /var/www/glpi/config/config_db.php` |
+| Application URL | Setup > General > `http://helpdesk.corp.silverbank.internal` |
+| DNS record (on LN-DC01) | `Add-DnsServerResourceRecordA -ZoneName corp.silverbank.internal -Name helpdesk -IPv4Address 192.168.7.83` |
+| Snapshot | CT 230 > Snapshots > `glpi-installed` |
+
+GLPI shows a warning banner until every default password is changed. Every GLPI installation starts with the same default accounts, and attackers try them first.
+
+## 9. Troubleshooting log
+
+Problems met during this installation, and how they were solved.
+
+| Problem | Cause | Fix |
+| --- | --- | --- |
+| `nslookup` printed nothing | Minimal container quirk | Tested with `getent hosts` (works for every program); installed `dnsutils` |
+| Installer: "Security configuration for sessions" not OK | Apache still running with the old PHP settings | Restarted Apache; verified the live values with a temporary PHP test page |
+| `mysql -u glpi -p` "Access denied" with the right password | Proxmox console keyboard layout changed symbols typed at the hidden prompt | Tested non-interactively with `-p'<password>'`; typed passwords in the browser instead |
+| "The connection to the SQL server could not be established" | `config_db.php` held an old password from a first install; the database password had been changed afterwards | Found repeated "Access denied" lines in `journalctl -u mariadb` (an app retrying), then compared `config_db.php` with the real password |
+| Login "Incorrect username or password" after fixing the config | Unclear state after several partial attempts | Clean reinstall: removed `config_db.php` and `glpicrypt.key`, dropped and recreated the database, installed with `bin/console database:install` |
+
+**Lessons**
+
+- Test a login outside the application (`mysql -u user -p'...'`) to find which layer is broken.
+- Changing a password in one place doesn't update the applications that use it. Check their config files.
+- A burst of automatic "Access denied" lines in a log means a service is retrying with saved credentials.
+- When an install has been half-done several times, a clean reinstall to a known state is faster than guessing.
+- Use SSH from the Mac instead of the Proxmox console: the keyboard always matches and copy/paste works.
+
+## 10. Next steps
+
+- [ ] Create a read-only AD service account (`svc_glpi`) for GLPI
+- [ ] Connect GLPI to Active Directory (LDAP), so SilverBank employees log in with their domain accounts
+- [ ] Ticket categories, priorities and technician groups
+- [ ] Practise helpdesk tickets (separate file: ticket examples and solutions)
+- [ ] Later: HTTPS with a certificate from the domain (then enable `session.cookie_secure`)
