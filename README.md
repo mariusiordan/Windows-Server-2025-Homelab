@@ -1,12 +1,12 @@
 # SilverBank Lab Documentation
 
-> Home lab project. SilverBank is a fictional company, built on my own Proxmox server to practise Windows Server 2025 administration. No real company data, passwords or public IP addresses are included.
+> Home lab project. SilverBank is a fictional company, built on my own Proxmox server to practise Windows Server 2025 administration and helpdesk work. No real company data, passwords or public IP addresses are included.
 
-Last updated: 31 October 2026
+Last updated: 5 November 2026
 
 ## Overview
 
-SilverBank is a fictional small bank with about 35 employees. Its servers run on my Proxmox homelab, a Dell OptiPlex 5060 (i7-8700, 48 GB RAM), and its network is being built on a physical Cisco Catalyst 3560-CX switch.
+SilverBank is a fictional small bank with about 35 employees. Its servers run on my Proxmox homelab, a Dell OptiPlex 5060 (i7-8700, 48 GB RAM), and its network is being built on a physical Cisco Catalyst 3560-CX switch. Staff report problems through a **GLPI** helpdesk connected to Active Directory, and I solve them as the technician.
 
 | Item | Value |
 | --- | --- |
@@ -19,14 +19,18 @@ SilverBank is a fictional small bank with about 35 employees. Its servers run on
 
 The lab is a practice environment for entry-level support and sysadmin roles.
 
-### Documents in this repository
+## Documentation
 
-| File | Contents |
+Every guide shows the **GUI steps first**, then **PowerShell (optional)**, then **how to check it worked**.
+
+| Folder | Contents |
 | --- | --- |
-| `README.md` | This page: lab overview, inventory, operations, troubleshooting |
-| `AD-Installation-Guide.md` | Step-by-step guide: two domain controllers for corp.silverbank.internal |
-| `AD-Users-Computers-CheatSheet.md` | PowerShell cheat sheet: OUs, users, groups, computers, helpdesk tasks |
-| `learning-log/` | One note per study session |
+| [`01-active-directory/`](01-active-directory/README.md) | First DC, second DC, file server (shares + NTFS), clients, AD troubleshooting and error codes |
+| [`02-dns/`](02-dns/README.md) | DNS Manager and zones, reverse lookup zone, A/CNAME/PTR records, aging and scavenging, troubleshooting |
+| [`03-dhcp/`](03-dhcp/README.md) | DHCP reference: install, scopes and options, reservations, failover, relay, troubleshooting (not applied in the lab yet) |
+| [`04-glpi/`](04-glpi/README.md) | GLPI helpdesk: installation, AD login over LDAPS, technician cheat sheet, maintenance, troubleshooting |
+| [`tickets/`](tickets/README.md) | Practice helpdesk tickets, solved and documented step by step |
+| [`learning-log/`](learning-log/README.md) | One short note per study session |
 
 ## Network diagram
 
@@ -44,34 +48,36 @@ flowchart TB
     subgraph domain["Domain: corp.silverbank.internal (SILVERBANK)"]
         dc01["LN-DC01<br/>AD DS + DNS<br/>192.168.7.80"]
         dc02["LN-DC02<br/>AD DS + DNS + Global Catalog<br/>192.168.7.82"]
-        fs01["LN-FS01<br/>File server + Windows Admin Center<br/>192.168.7.81"]
+        fs01["LN-FS01<br/>File server + Certificate Authority<br/>192.168.7.81"]
         cl01["LN-CL01<br/>Windows 11 Pro<br/>DHCP"]
+        glpi["ln-glpi01<br/>GLPI helpdesk (Ubuntu LXC)<br/>192.168.7.83"]
     end
 
     bridge --- dc01
     bridge --- dc02
     bridge --- fs01
     bridge --- cl01
+    bridge --- glpi
 
     dc01 <-->|AD replication| dc02
     fs01 -.->|DNS + logins| dc01
     cl01 -.->|DNS + logins| dc02
+    glpi -.->|LDAPS 636| dc01
 ```
 
 Solid lines are network connections. Dotted lines show which servers the members use for DNS and authentication (each member uses both DCs).
 
 ## Server inventory
 
-The domain has four Windows machines: two domain controllers, one file server and one client PC.
-
-| VM ID | Name | Role | OS | IP | RAM | Preferred DNS | Alternate DNS |
+| ID | Name | Role | OS | IP | RAM | Preferred DNS | Alternate DNS |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 200 | LN-DC01 | First DC, DNS (created the forest) | Server 2025 Desktop Experience | 192.168.7.80 (static) | 4 GB | 192.168.7.82 | 127.0.0.1 |
+| 200 | LN-DC01 | First DC, DNS (created the forest), PDC Emulator | Server 2025 Desktop Experience | 192.168.7.80 (static) | 4 GB | 192.168.7.82 | 127.0.0.1 |
 | 202 | LN-DC02 | Second DC, DNS, Global Catalog | Server 2025 Desktop Experience | 192.168.7.82 (static) | 4 GB | 192.168.7.80 | 127.0.0.1 |
-| 201 | LN-FS01 | File server + Windows Admin Center | Server 2025 Desktop Experience | 192.168.7.81 (static) | 4 GB | 192.168.7.80 | 192.168.7.82 |
+| 201 | LN-FS01 | File server, Windows Admin Center, Enterprise Root CA (`corp-LN-FS01-CA`) | Server 2025 Desktop Experience | 192.168.7.81 (static) | 4 GB | 192.168.7.80 | 192.168.7.82 |
 | 220 | LN-CL01 | Employee PC | Windows 11 Pro 25H2 | DHCP (router) | 4 GB | 192.168.7.80 | 192.168.7.82 |
+| 230 | ln-glpi01 | GLPI 12 helpdesk (LXC container) | Ubuntu 26.04 LTS | 192.168.7.83 (static) | 2 GB | 192.168.7.80 | 192.168.7.82 |
 
-Common VM settings: q35, OVMF (UEFI) with Secure Boot keys, TPM 2.0, VirtIO SCSI single, disks on ZFS (NVMe) with Discard, CPU type host, QEMU guest agent on.
+Common VM settings: q35, OVMF (UEFI) with Secure Boot keys, TPM 2.0, VirtIO SCSI single, disks on ZFS (NVMe) with Discard, CPU type host, QEMU guest agent on. All servers use the **GMT Standard Time** zone.
 
 ## IP address plan
 
@@ -84,21 +90,22 @@ The home LAN is 192.168.7.0/24. Static devices use addresses below .110; the rou
 | .110 - .199 | DHCP: home devices, lab clients |
 | .200 - .254 | Free for the future |
 
-| IP | Device | Type |
-| --- | --- | --- |
-| 192.168.7.1 | Home router | Gateway |
-| 192.168.7.12 | Proxmox host (pve) | Static |
-| 192.168.7.50 | edge-nginx (SilverBank app) | Static |
-| 192.168.7.60 | db-postgresql (SilverBank app) | Static |
-| 192.168.7.70 | monitoring-staging (SilverBank app) | Static |
-| 192.168.7.80 | LN-DC01 | Static |
-| 192.168.7.81 | LN-FS01 | Static |
-| 192.168.7.82 | LN-DC02 | Static |
-| 192.168.7.90 | Cisco Catalyst 3560-CX (management) | Static |
-| 192.168.7.101 | prod-vm1-BLUE (SilverBank app) | Static |
-| 192.168.7.102 | prod-vm2-GREEN (SilverBank app) | Static |
+| IP | Device | DNS name | Type |
+| --- | --- | --- | --- |
+| 192.168.7.1 | Home router | | Gateway |
+| 192.168.7.12 | Proxmox host | `pve` | Static |
+| 192.168.7.50 | edge-nginx (SilverBank app) | | Static |
+| 192.168.7.60 | db-postgresql (SilverBank app) | | Static |
+| 192.168.7.70 | monitoring-staging (SilverBank app) | | Static |
+| 192.168.7.80 | LN-DC01 | `ln-dc01` | Static |
+| 192.168.7.81 | LN-FS01 | `ln-fs01` | Static |
+| 192.168.7.82 | LN-DC02 | `ln-dc02` | Static |
+| 192.168.7.83 | GLPI helpdesk | `ln-glpi01`, alias `helpdesk` | Static |
+| 192.168.7.90 | Cisco Catalyst 3560-CX (management) | `sw-core01` | Static |
+| 192.168.7.101 | prod-vm1-BLUE (SilverBank app) | | Static |
+| 192.168.7.102 | prod-vm2-GREEN (SilverBank app) | | Static |
 
-The guest Wi-Fi is a separate, isolated network. These addresses are temporary: the plan moves SilverBank to its own VLANs behind OPNsense (servers in 10.10.10.0/24).
+The guest Wi-Fi is a separate, isolated network. These addresses are temporary: the plan moves SilverBank to its own VLANs on the 3560-CX.
 
 ## Physical network lab
 
@@ -108,7 +115,7 @@ The guest Wi-Fi is a separate, isolated network. These addresses are temporary: 
 | Cabling | Cat6 U/UTP solid copper (OFC), LSZH | Cables crimped by hand, T568B, checked with a cable tester |
 | Console access | USB console cable | For the switch's console port |
 
-Status (October 2026): the switch sits between the home router and the Proxmox host, with management IP 192.168.7.90. The SilverBank VLANs are not configured yet; cable, crimping tool and console cable are arriving.
+Status (November 2026): the switch sits between the home router and the Proxmox host, with management IP 192.168.7.90. The SilverBank VLANs are not configured yet.
 
 Planned SilverBank network on the switch:
 
@@ -119,86 +126,56 @@ Planned SilverBank network on the switch:
 | 30 | Management | 10.10.30.0/24 | IT admin access, switch management |
 | 99 | Guest | 10.10.99.0/24 | Internet only, isolated |
 
-What I plan to configure:
-
-- VLANs and access ports
-- An 802.1Q trunk to the Proxmox host (VLAN-aware bridge), so each VM is tagged into its VLAN
-- SVIs on the 3560-CX for inter-VLAN routing
-- DHCP relay (`ip helper-address`) so the domain controllers hand out addresses to every VLAN
-- ACLs to keep the Guest VLAN away from the servers
-
-Every configuration will be tested in Packet Tracer first, then applied to the real switch.
-
-## How each machine joined the domain
-
-Every machine joined only after its DNS pointed to the domain controllers. That was the cause of most errors.
-
-| Machine | Method | Problem met | Fix |
-| --- | --- | --- | --- |
-| LN-DC01 | Created the domain: promotion wizard, Add a new forest | None | - |
-| LN-DC02 | Joined first with PowerShell, then promoted: Add a domain controller to an existing domain, replicate from LN-DC01 | Wizard error: "error getting the list of sites ... user name or password is incorrect" | Wizard was using the local account `LN-DC02\Administrator`. Joined with the domain account first, logged in as `SILVERBANK\Administrator`, then promoted |
-| LN-FS01 | GUI: Settings > System > About > Domain or workgroup > Change | Red in Server Manager before joining (workgroup, no trust) | Joined the domain; turned green |
-| LN-CL01 | GUI, same as LN-FS01 | "An AD domain controller could not be contacted" | DNS was the router. Set DNS to .80 and .82 in `ncpa.cpl`, IP stays DHCP |
-
-Command used to join LN-DC02:
-
-```powershell
-Add-Computer -DomainName corp.silverbank.internal -Credential SILVERBANK\Administrator -Restart
-```
-
-Command to set DNS on a member machine (check the adapter name with `Get-NetAdapter` first):
-
-```powershell
-Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 192.168.7.80,192.168.7.82
-```
-
-The UI would also have worked for LN-DC02: click **Change...** next to the credentials and type `SILVERBANK\Administrator`.
+What I plan to configure: VLANs and access ports, an 802.1Q trunk to Proxmox, SVIs for inter-VLAN routing, a DHCP relay (`ip helper-address`) to the domain controllers, and ACLs to keep the Guest VLAN away from the servers. Every configuration is tested in Packet Tracer first.
 
 ## Accounts and logins
 
-Use `SILVERBANK\Administrator` on all four machines. Passwords are kept outside this document.
+Passwords are kept in a password manager, never in this repository.
 
 | Account | Type as | Exists on | Use for |
 | --- | --- | --- | --- |
-| Domain admin | `SILVERBANK\Administrator` | Active Directory (all machines) | Normal admin work |
+| Domain admin | `SILVERBANK\Administrator` | Active Directory (all machines) | Admin work |
 | Local admin | `.\Administrator` | LN-FS01 only | Emergencies (domain broken) |
 | Local setup account | `.\<setup name>` | LN-CL01 only | Emergencies |
 | DSRM | (set at promotion) | Each DC | Repairing Active Directory |
+| `svc_glpi` | (service account) | Active Directory, OU `Service Accounts` | GLPI reads AD over LDAPS — never logs in interactively |
+| `glpi` | GLPI internal database | GLPI | Break-glass helpdesk admin |
+| `marius` | SSH key + sudo | ln-glpi01 | Linux administration (root SSH login is blocked) |
 
 - Domain controllers have no local accounts after promotion.
-- In the Windows App (Mac), each PC entry must use the domain account, or "Ask when required".
-- Later: create personal accounts (a daily account and a separate admin account) instead of the built-in Administrator.
+- Later: a personal daily account and a separate admin account instead of the built-in Administrator.
 
 ## Proxmox operations
 
 Start the domain controllers first and shut them down last.
 
-| Order | VM | Startup delay | Shutdown timeout |
+| Order | VM / CT | Startup delay | Shutdown timeout |
 | --- | --- | --- | --- |
 | 1 | 200 LN-DC01 | 180 s | 180 s |
 | 2 | 202 LN-DC02 | 120 s | 180 s |
 | 3 | 201 LN-FS01 | 30 s | 180 s |
 | 4 | 220 LN-CL01 | - | 180 s |
+| 5 | 230 ln-glpi01 | - | - |
 
 The order applies only to host boot, host shutdown and Bulk Start / Bulk Shutdown, not to single VMs.
-
-Set the order:
 
 ```bash
 qm set 200 --startup order=1,up=180,down=180
 qm set 202 --startup order=2,up=120,down=180
 qm set 201 --startup order=3,up=30,down=180
 qm set 220 --startup order=4,down=180
+pct set 230 --startup order=5
 ```
 
 Safe manual shutdown:
 
 ```bash
+pct shutdown 230                # ln-glpi01
 qm shutdown 220 --timeout 180   # LN-CL01
 qm shutdown 201 --timeout 180   # LN-FS01
 qm shutdown 202 --timeout 180   # LN-DC02
 qm shutdown 200 --timeout 180   # LN-DC01 last
-qm list
+qm list; pct list
 ```
 
 Check the QEMU guest agent on all running VMs:
@@ -214,11 +191,7 @@ RAM: 48 GB since October 2026 (2 x 16 GB + 2 x 8 GB, DDR4-2666). memtester passe
 
 ## Backups and shadow copies
 
-Tested on the file server (LN-FS01) in October 2026:
-
-- Created a new volume and ran a backup with **Windows Server Backup**
-- Deleted files from a shared folder, then **restored them** from the backup
-- Restored a file with **Volume Shadow Copy** (right-click > Restore previous versions)
+Tested on the file server (LN-FS01) in October 2026: a **Windows Server Backup** with a tested restore, and a file restored with **Volume Shadow Copy** (Previous Versions).
 
 | | Shadow Copy | Windows Server Backup | Proxmox backup |
 | --- | --- | --- | --- |
@@ -230,18 +203,9 @@ Tested on the file server (LN-FS01) in October 2026:
 Rules I follow:
 
 - **A backup you haven't restored isn't a backup.** Always test a restore.
-- **A backup on the same disk as the data is a single point of failure.** If the disk fails, both are lost.
+- **A backup on the same disk as the data is a single point of failure.**
 - **3-2-1 rule:** 3 copies, on 2 types of storage, 1 copy off-site.
 - Shadow copies are kept on the same volume by default, so they don't replace backups.
-
-```powershell
-wbadmin get versions                                              # list backups
-wbadmin start backup -backupTarget:E: -include:D:\Shares -quiet   # back up the shares to E:
-vssadmin list shadows                                             # list shadow copies
-vssadmin create shadow /for=D:                                    # take a snapshot now
-```
-
-(Drive letters are examples: E: = backup volume, D: = data volume.)
 
 ## Course progress
 
@@ -253,46 +217,47 @@ I chose the lessons most useful for a Level 1 helpdesk role and practise each on
 | Join servers and clients to the domain | Done |
 | Backing up Windows Server 2025 | Done |
 | Volume Shadow Copy | Done |
+| File server security (NTFS and share permissions) | Done — see [TICKET-001](tickets/TICKET-001-finance-folder-access.md) |
+| DNS: reverse zone, records, aging and scavenging | Done |
+| Active Directory Certificate Services (for LDAPS) | Done |
 | Event logs for troubleshooting | Next |
-| File server security (NTFS and share permissions) | To do |
 | Network printing | To do |
 | Task Manager, Performance Monitor | To do |
 | IIS, Hyper-V, Containers | Skipped for now (less relevant for helpdesk) |
 
-## Troubleshooting log
+## Troubleshooting highlights
 
-DNS caused most problems: check that the machine uses the DCs as DNS before anything else.
+DNS caused most problems: check that the machine uses the DCs as DNS before anything else. Full logs are in each folder's troubleshooting guide.
 
 | Date | Problem | Cause | Fix |
 | --- | --- | --- | --- |
-| Oct 2026 | QEMU agent missing on LN-DC02 and LN-CL01 | Guest tools not installed in Windows | Ran `virtio-win-guest-tools.exe` from the virtio CD |
+| Nov 2026 | Plain LDAP bind refused: "Strong(er) authentication required" | WS2025 DCs require LDAP signing | Built an Enterprise Root CA and switched GLPI to **LDAPS (636)** |
+| Nov 2026 | Certificate request: "RPC server is unavailable" | No DNS record for the CA server; LN-DC01's DNS pointed to the router (Hyper-V vEthernet adapter) | Added the record; fixed DC01's DNS client |
+| Nov 2026 | "Certificate is not yet valid" | Servers on Pacific Time (Windows default) | GMT Standard Time on every server, time resync |
+| Nov 2026 | Employee can't log in to GLPI (`data 52e`) | Wrong password: US keyboard, UK layout; first reset never saved | Reset, verified `PasswordLastSet` |
+| Nov 2026 | "Access denied" on the Finance share | User moved department, not in `GG_Finance` | Manager approval, added to the group — [TICKET-001](tickets/TICKET-001-finance-folder-access.md) |
 | Oct 2026 | LN-CL01: "AD domain controller could not be contacted" | Client DNS was the router | Set DNS to .80 and .82 |
-| Oct 2026 | Ping by IP worked, by name failed | LN-FS01 was not joined yet, so no DNS record | Joined the domain (`ipconfig /registerdns` if a record is missing) |
-| Oct 2026 | Ping failed but services worked | Windows Firewall blocks ICMP by default | `Enable-NetFirewallRule -DisplayName "File and Printer Sharing (Echo Request - ICMPv4-In)"` |
+| Oct 2026 | Ping by IP worked, by name failed | No DNS record for LN-FS01 | Joined the domain / `ipconfig /registerdns` |
 | Sep 2026 | LN-DC02 promotion: wrong user or password | Wizard used the local account | Used `SILVERBANK\Administrator` |
-| Sep 2026 | "The server is not operational" | DC not reachable (DNS or network profile) | Checked DNS, services and `Get-NetConnectionProfile` |
-| Sep 2026 | DNS role not shown | Only the WAC DNS extension was installed, not the role | Role installed with the domain controller |
-| Sep 2026 | Proxmox root disk at 75% | 7 old kernels (8.4 GB) | `apt purge` of old kernels, `apt clean`, journal limit 200 MB: down to 62% |
-| Sep 2026 | scp to Proxmox failed | IP typo: 192.169 instead of 192.168 | Used the private address 192.168.7.12 |
+| Sep 2026 | Proxmox root disk at 75% | 7 old kernels (8.4 GB) | Purged old kernels, `apt clean`, journal limit: down to 62% |
 
-Useful checks: `ipconfig /all`, `nslookup`, `Test-NetConnection <host> -Port 389`, `Get-Service NTDS, DNS, Netlogon`, `dcdiag /q`, `repadmin /replsummary`.
+Details: [AD](01-active-directory/05-troubleshooting.md) · [DNS](02-dns/05-troubleshooting.md) · [GLPI](04-glpi/05-troubleshooting.md)
 
 ## Next steps
 
 - [x] Windows Server Backup with a tested restore
 - [x] Volume Shadow Copy restore
-- [ ] Move backups to a separate disk and schedule them
+- [x] SilverBank OUs, groups and users
+- [x] File shares on LN-FS01 with NTFS permissions per department
+- [x] Reverse DNS lookup zone and records for Linux servers and the switch
+- [x] GLPI helpdesk connected to Active Directory over LDAPS
+- [x] First helpdesk ticket solved and documented
+- [ ] Weekly helpdesk ticket practice (easy → harder)
 - [ ] Event Viewer: practise an account lockout (event ID 4740) and unlock the user
-- [ ] Create SilverBank OUs, groups and users (PowerShell script from a CSV)
-- [ ] Group Policy: password policy, mapped drives, first GPO to allow ping on servers
-- [ ] File shares on LN-FS01 with NTFS permissions per department
-- [ ] Reverse DNS lookup zone
-- [ ] Windows 11 template with Sysprep, then LN-CL02
-- [ ] Crimp and test the first Cat6 cables
-- [ ] Console into the Cisco 3560-CX, reset it and set a basic secure configuration
-- [ ] Design the SilverBank VLANs in Packet Tracer, then build them on the real switch
-- [ ] Trunk to Proxmox, inter-VLAN routing, DHCP relay to the domain controllers
-- [ ] OPNsense as the edge firewall, then DHCP on the DCs
-- [ ] Backups (Proxmox Backup Server or USB disk) and a UPS
-- [ ] GLPI ticketing system in a Debian container for helpdesk practice
-- [ ] Later: second PC as a Manchester site (AD Sites and replication)
+- [ ] Group Policy: password policy, mapped drives, allow ping on servers
+- [ ] Network printing
+- [ ] Microsoft 365 basics
+- [ ] Move backups to a separate disk and schedule them
+- [ ] Console into the Cisco 3560-CX and set a basic secure configuration
+- [ ] SilverBank VLANs in Packet Tracer, then on the real switch; DHCP relay to the DCs
+- [ ] HTTPS for GLPI with a certificate from the SilverBank CA
