@@ -65,10 +65,13 @@ Access-based enumeration enabled. Kevin's permissions come **only through the gr
 - [x] `Get-ADUser kevin.brooks`: correct OU, description, company, manager, expiry date
 - [x] **Effective Access** on the IT folder for `kevin.brooks`: read ✅ — write / delete ❌
 - [x] **Effective Access** for an IT user: Modify ✅
-- [x] Account is **disabled** until Monday
-- [ ] **Monday 09/11:** enable the account
-- [ ] **Monday 09/11:** test as Kevin on LN-CL01 — forced to change password, opens `\\LN-FS01\IT`, cannot create or delete files
-- [ ] David confirms Kevin can work
+- [x] Account was **disabled** until the start date
+- [x] **10/11:** account enabled (as `adm-marius.iordan`)
+- [x] **10/11:** logged in as Kevin on LN-CL01 — forced to change the temporary password ✅
+- [x] `\\LN-FS01\IT` opens and files can be read ✅
+- [x] Creating a folder or file in `\\LN-FS01\IT` → **needs permission / denied** ✅ (read-only works)
+- [x] Other department shares (Finance etc.) → **denied** ✅
+- [x] David informed that Kevin's access works
 
 ### PowerShell checks (optional)
 
@@ -149,9 +152,9 @@ New-Item \\LN-FS01\IT\test.txt            # EXPECT an error: Access is denied �
 ## 6. Ticket status
 
 - **Friday 06/11:** status **Pending** ⏸️ — waiting for the start date
-- **Monday 09/11:** enable, test, add the Solution, close
+- **Tuesday 10/11:** enabled, tested, Solution added → **Solved** ✅
 
-## 7. Solution (to add in GLPI on Monday)
+## 7. Solution (as written in GLPI)
 
 ```
 Cause:        New contractor Kevin Brooks (Brooks Cabling Ltd) starting 09/11/2026,
@@ -159,10 +162,11 @@ Cause:        New contractor Kevin Brooks (Brooks Cabling Ltd) starting 09/11/20
 Fix:          Created kevin.brooks in the Contractors OU with manager David Reid and
               an account expiry date of 31/12/2026. Added him to GG_IT_Read for
               read-only access to the IT share (\\LN-FS01\IT). The account was kept
-              disabled until his start date and enabled on Monday morning.
+              disabled until his start date and enabled on 10/11.
 Verification: Effective Access shows read-only access for kevin.brooks. Tested a login
-              on LN-CL01: password change was forced, the IT share opens, and he
-              cannot create or delete files.
+              on LN-CL01: password change was forced, the IT share opens and can be
+              read, creating files or folders is denied, and other department shares
+              are denied.
 User note:    David gave Kevin his temporary password in person. Kevin must choose his
               own password at first login. The account stops working after 31/12/2026 —
               David should raise a ticket if the contract is extended.
