@@ -12,6 +12,10 @@
 | [04/11/2026](2026-11-04.md) | GLPI + Active Directory (LDAPS) | GLPI connected to AD; first employee login; solved `52e` and the keyboard trap |
 | [05/11/2026](2026-11-05.md) | First ticket, file shares, documentation | TICKET-001 solved; repo reorganised into AD / DNS / DHCP / GLPI folders |
 | [31/10/2026](2026-10-31.md) | Backup, Volume Shadow Copy, study plan | Tested restores; chose the lessons to focus on |
+| [07/11/2026](2026-11-07.md) | Lockout policy, delegation, locked account | Service Desk can unlock without Domain Admin; TICKET-003 
+| [10/11/2026](2026-11-10.md) | New starter closed, password reset | TICKET-002 solved; TICKET-004 solved |
+solved |
+| [005](TICKET-005-leaver.md) | Leaver - Ben Morris | 🟢 Easy | Accounts / Leaver | Pending |
 
 Newest first. Add one row per session.
 

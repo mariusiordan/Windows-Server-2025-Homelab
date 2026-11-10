@@ -23,7 +23,7 @@ Last updated: 7 November 2026
 | User says | First checks (in order) | Usual causes | Fix | Status |
 |---|---|---|---|---|
 | "My account is locked" | **Verify identity** (call back on the AD number, or the manager) · `LockedOut` on the Account tab (it may have **unlocked by itself** after 15 min) · if it keeps locking: Event **4740** on the PDC (source computer) | Wrong password typed many times · **old password saved** on a phone, mapped drive or second PC | Unlock (Service Desk, delegated) · if it keeps locking, fix the saved password on the source device | ✅ [TICKET-003](TICKET-003-account-locked.md) |
-| "I forgot my password" | **Verify identity first** · account enabled? locked? | Forgotten · expired | Reset Password · tick "must change at next logon" · unlock · check **PasswordLastSet** | 🔲 |
+| "I forgot my password" | **Verify identity first** (in person: **staff badge**; phone: call back on the AD number or the manager) · **locked?** (the user often doesn't know!) · enabled? | Forgotten (often after a holiday) · expired | **Reset Password** window: temporary password + ✅ "must change at next logon" + ✅ **Unlock** in the same step · user logs in straight away | ✅ [TICKET-004](TICKET-004-password-reset.md) |
 | "My password doesn't work" (but they're sure it's right) | Caps Lock · **keyboard layout** (UK ↔ US) · local vs domain account (`SILVERBANK\user`) · password expired | Keyboard layout · typing the old password · expired password | Type it somewhere visible · reset if needed | ✅ (lab: `52e` error, keyboard trap) |
 | "I can't log in at all" | Account **Enabled**? **Expired** (contractor)? Locked? · One PC or every PC? | Disabled leaver · contractor past expiry · PC lost its domain trust | Enable / extend expiry (with manager approval) · `Test-ComputerSecureChannel -Repair` | 🔲 |
 | "Trust relationship between this workstation and the domain failed" | Log in with a **local** admin account | PC restored from an old snapshot/backup · computer password out of sync | `Test-ComputerSecureChannel -Repair` · or remove and re-join the domain | 🔲 |
@@ -44,7 +44,7 @@ Last updated: 7 November 2026
 |---|---|---|---|---|
 | "New starter on Monday" | Ask the manager: **folders/access**, **PC**, **start date**, **end date** (contractor), **password handover** | The request is missing information | Create in the right OU · manager · expiry for contractors · **disabled until the start day** · groups · test · never email passwords | ✅ [TICKET-002](TICKET-002-new-contractor-account.md) |
 | "X is moving to another team" | Manager approval · current groups | — | Move OU · update Department/Title/Manager · **add new groups AND remove old ones** | ✅ (part of TICKET-001) |
-| "X has left the company" | Confirm with HR/manager · last day | — | **Disable, don't delete** · note date + ticket in Description · save group list · remove groups · move to Disabled OU | 🔲 |
+| "X has left the company" | **Confirm with the manager** · **when** exactly (end of day?) · **why** (friendly → end of day; dismissed → now) · who needs the files? · equipment? | — | **In AD, not just GLPI:** record groups → remove groups → **disable** (don't delete) → Description with date + ticket → move to **Disabled** OU → then GLPI inactive · **Pending** until equipment is back · L1 may need to **escalate** | ✅ [TICKET-005](TICKET-005-leaver.md) |
 
 ## Network
 
